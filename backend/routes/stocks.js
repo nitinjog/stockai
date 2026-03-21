@@ -3,8 +3,9 @@ const router = express.Router();
 const axios = require('axios');
 
 const YF_HEADERS = {
-  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-  'Accept': 'application/json',
+  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+  'Accept': '*/*',
+  'Accept-Language': 'en-US,en;q=0.9',
 };
 
 const NIFTY_50_SYMBOLS = [
@@ -20,47 +21,42 @@ const NIFTY_50_SYMBOLS = [
   'TECHM.NS', 'TITAN.NS', 'UPL.NS', 'ULTRACEMCO.NS', 'WIPRO.NS'
 ];
 
-async function fetchQuotes(symbols) {
-  const chunks = [];
-  for (let i = 0; i < symbols.length; i += 20) {
-    chunks.push(symbols.slice(i, i + 20));
-  }
-  const results = [];
-  for (const chunk of chunks) {
-    try {
-      const { data } = await axios.get(
-        `https://query2.finance.yahoo.com/v7/finance/quote?symbols=${chunk.join(',')}&fields=regularMarketPrice,regularMarketChange,regularMarketChangePercent,regularMarketVolume,regularMarketDayHigh,regularMarketDayLow,regularMarketPreviousClose,shortName,longName`,
-        { headers: YF_HEADERS, timeout: 10000 }
-      );
-      const quotes = data?.quoteResponse?.result || [];
-      results.push(...quotes);
-    } catch (e) {
-      console.warn('Chunk fetch error:', e.message);
-    }
-  }
-  return results;
+async function fetchChartQuote(symbol) {
+  const { data } = await axios.get(
+    `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?interval=1d&range=2d`,
+    { headers: YF_HEADERS, timeout: 10000 }
+  );
+  const meta = data?.chart?.result?.[0]?.meta;
+  if (!meta) return null;
+  const prevClose = meta.chartPreviousClose || meta.previousClose;
+  const price = meta.regularMarketPrice;
+  const change = price - prevClose;
+  const changePercent = prevClose ? (change / prevClose) * 100 : 0;
+  return {
+    symbol: symbol.replace('.NS', '').replace('.BO', '').replace('%26', '&'),
+    name: meta.longName || meta.shortName || symbol,
+    price,
+    previousClose: prevClose,
+    change,
+    changePercent,
+    volume: meta.regularMarketVolume,
+    high: meta.regularMarketDayHigh,
+    low: meta.regularMarketDayLow,
+  };
 }
 
 // GET /api/stocks/top-movers
 router.get('/top-movers', async (req, res) => {
   try {
-    const quotes = await fetchQuotes(NIFTY_50_SYMBOLS);
-    const sorted = quotes
-      .filter(q => q.regularMarketChangePercent != null)
-      .sort((a, b) => Math.abs(b.regularMarketChangePercent) - Math.abs(a.regularMarketChangePercent))
-      .slice(0, 10)
-      .map(q => ({
-        symbol: q.symbol?.replace('.NS', '').replace('.BO', '').replace('%26', '&'),
-        name: q.longName || q.shortName || q.symbol,
-        price: q.regularMarketPrice,
-        previousClose: q.regularMarketPreviousClose,
-        change: q.regularMarketChange,
-        changePercent: q.regularMarketChangePercent,
-        volume: q.regularMarketVolume,
-        high: q.regularMarketDayHigh,
-        low: q.regularMarketDayLow,
-      }));
-    res.json(sorted);
+    const results = await Promise.allSettled(
+      NIFTY_50_SYMBOLS.map(s => fetchChartQuote(s))
+    );
+    const quotes = results
+      .filter(r => r.status === 'fulfilled' && r.value && r.value.changePercent != null)
+      .map(r => r.value)
+      .sort((a, b) => Math.abs(b.changePercent) - Math.abs(a.changePercent))
+      .slice(0, 10);
+    res.json(quotes);
   } catch (err) {
     console.error('Top movers error:', err.message);
     res.status(500).json({ error: 'Failed to fetch top movers', details: err.message });
@@ -95,28 +91,9 @@ router.get('/quote/:symbol', async (req, res) => {
   try {
     const symbol = req.params.symbol.toUpperCase();
     const nsSymbol = symbol.includes('.') ? symbol : `${symbol}.NS`;
-    const { data } = await axios.get(
-      `https://query2.finance.yahoo.com/v7/finance/quote?symbols=${encodeURIComponent(nsSymbol)}`,
-      { headers: YF_HEADERS, timeout: 8000 }
-    );
-    const q = data?.quoteResponse?.result?.[0];
-    if (!q) return res.status(404).json({ error: 'Stock not found' });
-    res.json({
-      symbol,
-      fullSymbol: nsSymbol,
-      name: q.longName || q.shortName || symbol,
-      price: q.regularMarketPrice,
-      previousClose: q.regularMarketPreviousClose,
-      change: q.regularMarketChange,
-      changePercent: q.regularMarketChangePercent,
-      volume: q.regularMarketVolume,
-      high: q.regularMarketDayHigh,
-      low: q.regularMarketDayLow,
-      marketCap: q.marketCap,
-      fiftyTwoWeekHigh: q.fiftyTwoWeekHigh,
-      fiftyTwoWeekLow: q.fiftyTwoWeekLow,
-      pe: q.trailingPE,
-    });
+    const quote = await fetchChartQuote(nsSymbol);
+    if (!quote) return res.status(404).json({ error: 'Stock not found' });
+    res.json({ ...quote, symbol, fullSymbol: nsSymbol });
   } catch (err) {
     console.error('Quote error:', err.message);
     res.status(500).json({ error: 'Failed to fetch quote', details: err.message });

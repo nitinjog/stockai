@@ -24,29 +24,29 @@ router.post('/analyze', upload.single('chart'), async (req, res) => {
     const cleanSymbol = stockName.toUpperCase().trim();
     const nsSymbol = cleanSymbol.includes('.') ? cleanSymbol : `${cleanSymbol}.NS`;
 
-    // Fetch stock data
+    // Fetch stock data via Yahoo Finance v8 chart API
     let stockData = null;
     try {
       const { data } = await axios.get(
-        `https://query2.finance.yahoo.com/v7/finance/quote?symbols=${encodeURIComponent(nsSymbol)}`,
-        { headers: { 'User-Agent': 'Mozilla/5.0' }, timeout: 8000 }
+        `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(nsSymbol)}?interval=1d&range=2d`,
+        { headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36', 'Accept': '*/*' }, timeout: 8000 }
       );
-      const q = data?.quoteResponse?.result?.[0];
-      if (q) {
+      const meta = data?.chart?.result?.[0]?.meta;
+      if (meta) {
+        const prevClose = meta.chartPreviousClose || meta.previousClose;
+        const price = meta.regularMarketPrice;
         stockData = {
           symbol: cleanSymbol,
-          name: q.longName || q.shortName || cleanSymbol,
-          price: q.regularMarketPrice,
-          previousClose: q.regularMarketPreviousClose,
-          change: q.regularMarketChange,
-          changePercent: q.regularMarketChangePercent,
-          volume: q.regularMarketVolume,
-          high: q.regularMarketDayHigh,
-          low: q.regularMarketDayLow,
-          marketCap: q.marketCap,
-          fiftyTwoWeekHigh: q.fiftyTwoWeekHigh,
-          fiftyTwoWeekLow: q.fiftyTwoWeekLow,
-          pe: q.trailingPE,
+          name: meta.longName || meta.shortName || cleanSymbol,
+          price,
+          previousClose: prevClose,
+          change: price - prevClose,
+          changePercent: prevClose ? ((price - prevClose) / prevClose) * 100 : 0,
+          volume: meta.regularMarketVolume,
+          high: meta.regularMarketDayHigh,
+          low: meta.regularMarketDayLow,
+          fiftyTwoWeekHigh: meta.fiftyTwoWeekHigh,
+          fiftyTwoWeekLow: meta.fiftyTwoWeekLow,
         };
       }
     } catch (e) {
