@@ -2,8 +2,8 @@ const { GoogleGenerativeAI } = require('@google/generative-ai');
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
-// gemini-2.0-flash: 1500 req/day free tier (vs gemini-2.5-flash: 20/day)
-const MODEL = 'gemini-2.0-flash';
+// gemini-2.5-flash: 20 req/day free tier on this key (1 call per analysis = 20 analyses/day)
+const MODEL = 'gemini-2.5-flash';
 
 async function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));

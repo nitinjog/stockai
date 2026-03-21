@@ -76,7 +76,13 @@ router.post('/analyze', upload.single('chart'), async (req, res) => {
       timestamp: new Date().toISOString(),
     });
   } catch (err) {
-    console.error('Analysis error:', err);
+    console.error('Analysis error:', err.message);
+    if (err.message?.includes('429') || err.message?.includes('quota')) {
+      return res.status(429).json({
+        error: 'Daily AI quota reached (20 analyses/day on free tier). Quota resets at midnight IST. Please try again tomorrow or upgrade your Gemini API key at aistudio.google.com.',
+        retryAfter: 'midnight IST'
+      });
+    }
     res.status(500).json({ error: err.message || 'Analysis failed' });
   }
 });
