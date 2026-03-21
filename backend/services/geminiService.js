@@ -3,7 +3,7 @@ const { GoogleGenerativeAI } = require('@google/generative-ai');
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
 async function analyzeTechnicalChart(imageBase64, mimeType, stockName) {
-  const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+  const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
 
   const prompt = `You are an expert technical analyst specializing in Indian stock markets (NSE/BSE). Analyze this technical chart for ${stockName}.
 
@@ -52,7 +52,7 @@ Be specific with price levels where possible. Format clearly with bullet points.
 }
 
 async function analyzeFundamentals(stockName, news) {
-  const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+  const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
 
   const newsText = news.length > 0
     ? news.slice(0, 15).map((n, i) => `${i + 1}. [${n.source || 'News'}] ${n.title}${n.description ? ': ' + n.description.slice(0, 150) : ''}`).join('\n')
@@ -96,7 +96,7 @@ Format clearly with bullet points. Be concise and specific.`;
 }
 
 async function getFinalPrediction(stockName, previousClose, technicalAnalysis, fundamentalAnalysis) {
-  const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+  const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
 
   const prompt = `You are a senior market analyst for Indian equities (NSE/BSE). Synthesize the following analyses to provide a final actionable prediction.
 
