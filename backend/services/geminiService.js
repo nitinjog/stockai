@@ -1,73 +1,110 @@
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-const MODEL = 'gemini-2.5-flash';
 
-async function analyzeTechnicalChart(imageBase64, mimeType, stockName) {
-  const model = genAI.getGenerativeModel({ model: MODEL });
+// gemini-2.0-flash: 1500 req/day free tier (vs gemini-2.5-flash: 20/day)
+const MODEL = 'gemini-2.0-flash';
 
-  const prompt = `Expert technical analyst for Indian stock market (NSE/BSE). Analyze this chart for ${stockName}.
-
-Cover: 1) Trend (Bullish/Bearish/Sideways) 2) Support/Resistance levels 3) Chart patterns 4) Indicators (MA, RSI, MACD, Volume) 5) Tomorrow's price target range 6) Confidence: High/Medium/Low
-
-Be concise with bullet points and specific prices.`;
-
-  const result = await model.generateContent([
-    prompt,
-    { inlineData: { mimeType, data: imageBase64 } },
-  ]);
-
-  return result.response.text();
+async function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-async function analyzeFundamentals(stockName, news) {
+async function callGemini(parts, retries = 3) {
   const model = genAI.getGenerativeModel({ model: MODEL });
-
-  const newsText = news.length > 0
-    ? news.slice(0, 8).map((n, i) => `${i + 1}. ${n.title}`).join('\n')
-    : 'No recent news found.';
-
-  const prompt = `Fundamental analyst for Indian equities. Stock: ${stockName}
-
-News:
-${newsText}
-
-Provide: 1) Sentiment (Bullish/Bearish/Neutral) 2) Key positives 3) Key risks 4) Macro impact 5) Expected price move % 6) Events to watch
-
-Be brief and specific.`;
-
-  const result = await model.generateContent(prompt);
-  return result.response.text();
-}
-
-async function getFinalPrediction(stockName, previousClose, technicalAnalysis, fundamentalAnalysis) {
-  const model = genAI.getGenerativeModel({ model: MODEL });
-
-  const techSummary = technicalAnalysis ? technicalAnalysis.slice(0, 800) : 'No chart provided.';
-  const fundSummary = fundamentalAnalysis ? fundamentalAnalysis.slice(0, 800) : 'No news analysis.';
-
-  const prompt = `Senior market analyst for Indian equities. Stock: ${stockName}, Prev Close: ₹${previousClose}
-
-Technical: ${techSummary}
-
-Fundamental: ${fundSummary}
-
-Return ONLY this JSON (no markdown):
-{"targetPrice":0,"stopLoss":0,"priceRangeLow":0,"priceRangeHigh":0,"recommendation":"BUY","confidence":"Medium","percentageChange":0,"technicalBias":"Neutral","fundamentalBias":"Neutral","reasoning":["r1","r2","r3"],"riskFactors":["r1","r2"],"keyLevels":{"support":0,"resistance":0},"summary":""}`;
-
-  const result = await model.generateContent(prompt);
-  const text = result.response.text().trim();
-  const cleaned = text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-
-  try {
-    return JSON.parse(cleaned);
-  } catch {
-    const match = cleaned.match(/\{[\s\S]*\}/);
-    if (match) {
-      try { return JSON.parse(match[0]); } catch {}
+  for (let i = 0; i < retries; i++) {
+    try {
+      const result = await model.generateContent(parts);
+      return result.response.text();
+    } catch (err) {
+      const is429 = err.message?.includes('429');
+      const retryMatch = err.message?.match(/retry in (\d+)s/i);
+      const waitSecs = retryMatch ? parseInt(retryMatch[1]) + 2 : 15;
+      if (is429 && i < retries - 1) {
+        console.warn(`Gemini rate limited. Retrying in ${waitSecs}s...`);
+        await sleep(waitSecs * 1000);
+        continue;
+      }
+      throw err;
     }
-    return { error: 'Parse failed', rawText: text };
   }
 }
 
-module.exports = { analyzeTechnicalChart, analyzeFundamentals, getFinalPrediction };
+/**
+ * Single-call analysis: combines technical chart + news into one Gemini request.
+ * Returns { technicalAnalysis, fundamentalAnalysis, finalPrediction }
+ */
+async function runFullAnalysis(stockName, previousClose, news, imageBase64, mimeType) {
+  const newsText = news.length > 0
+    ? news.slice(0, 8).map((n, i) => `${i + 1}. ${n.title}`).join('\n')
+    : 'No recent news available.';
+
+  const chartSection = imageBase64
+    ? 'A technical chart image is attached. Analyze it carefully.'
+    : 'No chart image provided. Skip chart analysis, focus on news/fundamentals.';
+
+  const prompt = `You are a senior market analyst for Indian equities (NSE/BSE).
+
+Stock: ${stockName}
+Previous Close: ₹${previousClose}
+${chartSection}
+
+Recent News:
+${newsText}
+
+Provide a complete analysis in this EXACT JSON format (return ONLY JSON, no markdown):
+{
+  "technicalAnalysis": "<if chart provided: trend, support/resistance levels, patterns, indicators, tomorrow range. If no chart: 'No chart provided.'>",
+  "fundamentalAnalysis": "<sentiment bullish/bearish/neutral, key positives, key risks, macro impact, expected price move %>",
+  "finalPrediction": {
+    "targetPrice": <specific INR price for tomorrow>,
+    "stopLoss": <stop loss in INR>,
+    "priceRangeLow": <low end of range>,
+    "priceRangeHigh": <high end of range>,
+    "recommendation": "<BUY or SELL or HOLD>",
+    "confidence": "<High or Medium or Low>",
+    "percentageChange": <expected % change, positive or negative>,
+    "technicalBias": "<Bullish or Bearish or Neutral>",
+    "fundamentalBias": "<Bullish or Bearish or Neutral>",
+    "reasoning": ["<reason1>", "<reason2>", "<reason3>"],
+    "riskFactors": ["<risk1>", "<risk2>"],
+    "keyLevels": { "support": <number>, "resistance": <number> },
+    "summary": "<2-sentence summary>"
+  }
+}`;
+
+  const parts = imageBase64
+    ? [prompt, { inlineData: { mimeType, data: imageBase64 } }]
+    : [prompt];
+
+  const text = await callGemini(parts);
+  const cleaned = text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+
+  try {
+    const result = JSON.parse(cleaned);
+    return {
+      technicalAnalysis: result.technicalAnalysis || null,
+      fundamentalAnalysis: result.fundamentalAnalysis || null,
+      finalPrediction: result.finalPrediction || { error: 'No prediction returned' },
+    };
+  } catch {
+    const match = cleaned.match(/\{[\s\S]*\}/);
+    if (match) {
+      try {
+        const result = JSON.parse(match[0]);
+        return {
+          technicalAnalysis: result.technicalAnalysis || null,
+          fundamentalAnalysis: result.fundamentalAnalysis || null,
+          finalPrediction: result.finalPrediction || { error: 'No prediction returned' },
+        };
+      } catch {}
+    }
+    // Fallback: return raw text as technical analysis
+    return {
+      technicalAnalysis: text,
+      fundamentalAnalysis: null,
+      finalPrediction: { error: 'Could not parse JSON response', rawText: text.slice(0, 300) },
+    };
+  }
+}
+
+module.exports = { runFullAnalysis };

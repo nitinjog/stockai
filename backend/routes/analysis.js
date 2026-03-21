@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const multer = require('multer');
 const axios = require('axios');
-const { analyzeTechnicalChart, analyzeFundamentals, getFinalPrediction } = require('../services/geminiService');
+const { runFullAnalysis } = require('../services/geminiService');
 const { getAllNews } = require('../services/newsService');
 
 const storage = multer.memoryStorage();
@@ -56,20 +56,14 @@ router.post('/analyze', upload.single('chart'), async (req, res) => {
     // Fetch news
     const news = await getAllNews(cleanSymbol);
 
-    // Technical analysis (Gemini Vision)
-    let technicalAnalysis = null;
-    if (req.file) {
-      const imageBase64 = req.file.buffer.toString('base64');
-      technicalAnalysis = await analyzeTechnicalChart(imageBase64, req.file.mimetype, cleanSymbol);
-    }
-
-    // Fundamental analysis (Gemini + news)
-    const fundamentalAnalysis = await analyzeFundamentals(cleanSymbol, news);
-
-    // Final prediction (Gemini synthesis)
+    // Single Gemini call for everything (1 API call instead of 3)
+    const imageBase64 = req.file ? req.file.buffer.toString('base64') : null;
+    const mimeType = req.file ? req.file.mimetype : null;
     const previousClose = stockData?.previousClose || stockData?.price || 0;
-    const techText = technicalAnalysis || 'No technical chart provided. Base prediction on fundamentals only.';
-    const finalPrediction = await getFinalPrediction(cleanSymbol, previousClose, techText, fundamentalAnalysis);
+
+    const { technicalAnalysis, fundamentalAnalysis, finalPrediction } = await runFullAnalysis(
+      cleanSymbol, previousClose, news, imageBase64, mimeType
+    );
 
     res.json({
       stockName: cleanSymbol,
