@@ -1,7 +1,7 @@
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-const MODEL = 'gemini-2.5-flash-preview-04-17';
+const MODEL = 'gemini-2.5-flash';
 
 async function analyzeTechnicalChart(imageBase64, mimeType, stockName) {
   const model = genAI.getGenerativeModel({ model: MODEL });
