@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const multer = require('multer');
-const yahooFinance = require('yahoo-finance2').default;
+const axios = require('axios');
 const { analyzeTechnicalChart, analyzeFundamentals, getFinalPrediction } = require('../services/geminiService');
 const { getAllNews } = require('../services/newsService');
 
@@ -27,22 +27,28 @@ router.post('/analyze', upload.single('chart'), async (req, res) => {
     // Fetch stock data
     let stockData = null;
     try {
-      const quote = await yahooFinance.quote(nsSymbol, {}, { validateResult: false });
-      stockData = {
-        symbol: cleanSymbol,
-        name: quote.longName || quote.shortName || cleanSymbol,
-        price: quote.regularMarketPrice,
-        previousClose: quote.regularMarketPreviousClose,
-        change: quote.regularMarketChange,
-        changePercent: quote.regularMarketChangePercent,
-        volume: quote.regularMarketVolume,
-        high: quote.regularMarketDayHigh,
-        low: quote.regularMarketDayLow,
-        marketCap: quote.marketCap,
-        fiftyTwoWeekHigh: quote.fiftyTwoWeekHigh,
-        fiftyTwoWeekLow: quote.fiftyTwoWeekLow,
-        pe: quote.trailingPE,
-      };
+      const { data } = await axios.get(
+        `https://query2.finance.yahoo.com/v7/finance/quote?symbols=${encodeURIComponent(nsSymbol)}`,
+        { headers: { 'User-Agent': 'Mozilla/5.0' }, timeout: 8000 }
+      );
+      const q = data?.quoteResponse?.result?.[0];
+      if (q) {
+        stockData = {
+          symbol: cleanSymbol,
+          name: q.longName || q.shortName || cleanSymbol,
+          price: q.regularMarketPrice,
+          previousClose: q.regularMarketPreviousClose,
+          change: q.regularMarketChange,
+          changePercent: q.regularMarketChangePercent,
+          volume: q.regularMarketVolume,
+          high: q.regularMarketDayHigh,
+          low: q.regularMarketDayLow,
+          marketCap: q.marketCap,
+          fiftyTwoWeekHigh: q.fiftyTwoWeekHigh,
+          fiftyTwoWeekLow: q.fiftyTwoWeekLow,
+          pe: q.trailingPE,
+        };
+      }
     } catch (e) {
       console.warn('Could not fetch stock quote:', e.message);
     }

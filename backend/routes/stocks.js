@@ -1,6 +1,11 @@
 const express = require('express');
 const router = express.Router();
-const yahooFinance = require('yahoo-finance2').default;
+const axios = require('axios');
+
+const YF_HEADERS = {
+  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+  'Accept': 'application/json',
+};
 
 const NIFTY_50_SYMBOLS = [
   'ADANIENT.NS', 'ADANIPORTS.NS', 'APOLLOHOSP.NS', 'ASIANPAINT.NS', 'AXISBANK.NS',
@@ -9,29 +14,43 @@ const NIFTY_50_SYMBOLS = [
   'EICHERMOT.NS', 'GRASIM.NS', 'HCLTECH.NS', 'HDFCBANK.NS', 'HDFCLIFE.NS',
   'HEROMOTOCO.NS', 'HINDALCO.NS', 'HINDUNILVR.NS', 'ICICIBANK.NS', 'ITC.NS',
   'INDUSINDBK.NS', 'INFY.NS', 'JSWSTEEL.NS', 'KOTAKBANK.NS', 'LT.NS',
-  'M&M.NS', 'MARUTI.NS', 'NTPC.NS', 'NESTLEIND.NS', 'ONGC.NS',
+  'M%26M.NS', 'MARUTI.NS', 'NTPC.NS', 'NESTLEIND.NS', 'ONGC.NS',
   'POWERGRID.NS', 'RELIANCE.NS', 'SBILIFE.NS', 'SBIN.NS', 'SHREECEM.NS',
   'SUNPHARMA.NS', 'TATACONSUM.NS', 'TATAMOTORS.NS', 'TATASTEEL.NS', 'TCS.NS',
   'TECHM.NS', 'TITAN.NS', 'UPL.NS', 'ULTRACEMCO.NS', 'WIPRO.NS'
 ];
 
+async function fetchQuotes(symbols) {
+  const chunks = [];
+  for (let i = 0; i < symbols.length; i += 20) {
+    chunks.push(symbols.slice(i, i + 20));
+  }
+  const results = [];
+  for (const chunk of chunks) {
+    try {
+      const { data } = await axios.get(
+        `https://query2.finance.yahoo.com/v7/finance/quote?symbols=${chunk.join(',')}&fields=regularMarketPrice,regularMarketChange,regularMarketChangePercent,regularMarketVolume,regularMarketDayHigh,regularMarketDayLow,regularMarketPreviousClose,shortName,longName`,
+        { headers: YF_HEADERS, timeout: 10000 }
+      );
+      const quotes = data?.quoteResponse?.result || [];
+      results.push(...quotes);
+    } catch (e) {
+      console.warn('Chunk fetch error:', e.message);
+    }
+  }
+  return results;
+}
+
 // GET /api/stocks/top-movers
 router.get('/top-movers', async (req, res) => {
   try {
-    const results = await Promise.allSettled(
-      NIFTY_50_SYMBOLS.map(symbol =>
-        yahooFinance.quote(symbol, {}, { validateResult: false })
-      )
-    );
-
-    const quotes = results
-      .filter(r => r.status === 'fulfilled' && r.value && r.value.regularMarketChangePercent != null)
-      .map(r => r.value)
+    const quotes = await fetchQuotes(NIFTY_50_SYMBOLS);
+    const sorted = quotes
+      .filter(q => q.regularMarketChangePercent != null)
       .sort((a, b) => Math.abs(b.regularMarketChangePercent) - Math.abs(a.regularMarketChangePercent))
       .slice(0, 10)
       .map(q => ({
-        symbol: q.symbol?.replace('.NS', '').replace('.BO', ''),
-        fullSymbol: q.symbol,
+        symbol: q.symbol?.replace('.NS', '').replace('.BO', '').replace('%26', '&'),
         name: q.longName || q.shortName || q.symbol,
         price: q.regularMarketPrice,
         previousClose: q.regularMarketPreviousClose,
@@ -41,8 +60,7 @@ router.get('/top-movers', async (req, res) => {
         high: q.regularMarketDayHigh,
         low: q.regularMarketDayLow,
       }));
-
-    res.json(quotes);
+    res.json(sorted);
   } catch (err) {
     console.error('Top movers error:', err.message);
     res.status(500).json({ error: 'Failed to fetch top movers', details: err.message });
@@ -52,11 +70,12 @@ router.get('/top-movers', async (req, res) => {
 // GET /api/stocks/search/:query
 router.get('/search/:query', async (req, res) => {
   try {
-    const query = req.params.query;
-    const results = await yahooFinance.search(query, { newsCount: 0, quotesCount: 8 }, { validateResult: false });
-
-    const stocks = (results.quotes || [])
-      .filter(q => q.quoteType === 'EQUITY' && (q.symbol?.endsWith('.NS') || q.symbol?.endsWith('.BO') || q.exchange === 'NSI' || q.exchange === 'BSE'))
+    const { data } = await axios.get(
+      `https://query1.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(req.params.query)}&quotesCount=8&newsCount=0&listsCount=0`,
+      { headers: YF_HEADERS, timeout: 8000 }
+    );
+    const stocks = (data?.finance?.result?.[0]?.quotes || [])
+      .filter(q => q.quoteType === 'EQUITY' && (q.symbol?.endsWith('.NS') || q.symbol?.endsWith('.BO')))
       .slice(0, 6)
       .map(q => ({
         symbol: q.symbol?.replace('.NS', '').replace('.BO', ''),
@@ -64,7 +83,6 @@ router.get('/search/:query', async (req, res) => {
         name: q.longname || q.shortname || q.symbol,
         exchange: q.exchange,
       }));
-
     res.json(stocks);
   } catch (err) {
     console.error('Search error:', err.message);
@@ -77,26 +95,27 @@ router.get('/quote/:symbol', async (req, res) => {
   try {
     const symbol = req.params.symbol.toUpperCase();
     const nsSymbol = symbol.includes('.') ? symbol : `${symbol}.NS`;
-
-    const quote = await yahooFinance.quote(nsSymbol, {}, { validateResult: false });
-
+    const { data } = await axios.get(
+      `https://query2.finance.yahoo.com/v7/finance/quote?symbols=${encodeURIComponent(nsSymbol)}`,
+      { headers: YF_HEADERS, timeout: 8000 }
+    );
+    const q = data?.quoteResponse?.result?.[0];
+    if (!q) return res.status(404).json({ error: 'Stock not found' });
     res.json({
-      symbol: symbol,
+      symbol,
       fullSymbol: nsSymbol,
-      name: quote.longName || quote.shortName || symbol,
-      price: quote.regularMarketPrice,
-      previousClose: quote.regularMarketPreviousClose,
-      change: quote.regularMarketChange,
-      changePercent: quote.regularMarketChangePercent,
-      volume: quote.regularMarketVolume,
-      high: quote.regularMarketDayHigh,
-      low: quote.regularMarketDayLow,
-      marketCap: quote.marketCap,
-      fiftyTwoWeekHigh: quote.fiftyTwoWeekHigh,
-      fiftyTwoWeekLow: quote.fiftyTwoWeekLow,
-      avgVolume: quote.averageDailyVolume3Month,
-      pe: quote.trailingPE,
-      sector: quote.sector || '',
+      name: q.longName || q.shortName || symbol,
+      price: q.regularMarketPrice,
+      previousClose: q.regularMarketPreviousClose,
+      change: q.regularMarketChange,
+      changePercent: q.regularMarketChangePercent,
+      volume: q.regularMarketVolume,
+      high: q.regularMarketDayHigh,
+      low: q.regularMarketDayLow,
+      marketCap: q.marketCap,
+      fiftyTwoWeekHigh: q.fiftyTwoWeekHigh,
+      fiftyTwoWeekLow: q.fiftyTwoWeekLow,
+      pe: q.trailingPE,
     });
   } catch (err) {
     console.error('Quote error:', err.message);
