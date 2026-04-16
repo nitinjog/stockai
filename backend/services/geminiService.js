@@ -4,7 +4,7 @@ const axios = require('axios');
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
 // Primary and fallback Gemini models
-const GEMINI_MODELS = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash'];
+const GEMINI_MODELS = ['gemini-2.5-flash', 'gemini-2.0-flash'];
 
 // OpenRouter vision-enabled fallback models (in order of preference)
 const OPENROUTER_MODELS = [
@@ -72,13 +72,12 @@ async function callGemini(parts) {
       lastErr = err;
       const is429 = err.message?.includes('429');
       const is503 = err.message?.includes('503');
-      if (is503) {
-        // High demand — don't waste time retrying same model, move to next immediately
-        console.warn(`Gemini ${modelId} returned 503, trying next model...`);
+      const is404 = err.message?.includes('404');
+      if (is503 || is404) {
+        console.warn(`Gemini ${modelId} unavailable (${is503 ? '503' : '404'}), trying next model...`);
         continue;
       }
       if (is429) {
-        // Rate limited — wait briefly then try next model
         console.warn(`Gemini ${modelId} rate limited (429), trying next model in 5s...`);
         await sleep(5000);
         continue;
