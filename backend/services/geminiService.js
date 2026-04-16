@@ -1,32 +1,94 @@
 const { GoogleGenerativeAI } = require('@google/generative-ai');
+const axios = require('axios');
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
-// gemini-2.5-flash: 20 req/day free tier on this key (1 call per analysis = 20 analyses/day)
-const MODEL = 'gemini-2.5-flash';
+// Primary and fallback Gemini models
+const GEMINI_MODELS = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash'];
+
+// OpenRouter vision-enabled fallback models (in order of preference)
+const OPENROUTER_MODELS = [
+  'google/gemini-2.5-flash-preview',
+  'google/gemini-2.0-flash-exp:free',
+  'meta-llama/llama-4-maverick',
+  'openai/gpt-4o-mini',
+];
 
 async function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-async function callGemini(parts, retries = 3) {
-  const model = genAI.getGenerativeModel({ model: MODEL });
-  for (let i = 0; i < retries; i++) {
+async function callOpenRouter(prompt, imageBase64, mimeType) {
+  const apiKey = process.env.OPENROUTER_API_KEY;
+  if (!apiKey) throw new Error('No OpenRouter API key configured');
+
+  let lastErr;
+  for (const modelId of OPENROUTER_MODELS) {
     try {
+      console.log(`Trying OpenRouter model: ${modelId}`);
+      const userContent = imageBase64
+        ? [
+            { type: 'text', text: prompt },
+            { type: 'image_url', image_url: { url: `data:${mimeType};base64,${imageBase64}` } },
+          ]
+        : [{ type: 'text', text: prompt }];
+
+      const response = await axios.post(
+        'https://openrouter.ai/api/v1/chat/completions',
+        {
+          model: modelId,
+          messages: [{ role: 'user', content: userContent }],
+        },
+        {
+          headers: {
+            Authorization: `Bearer ${apiKey}`,
+            'Content-Type': 'application/json',
+            'HTTP-Referer': 'https://stockai.app',
+            'X-Title': 'StockAI',
+          },
+          timeout: 60000,
+        }
+      );
+
+      return response.data.choices[0].message.content;
+    } catch (err) {
+      lastErr = err;
+      const status = err.response?.status;
+      console.warn(`OpenRouter model ${modelId} failed (${status || err.message}), trying next...`);
+    }
+  }
+  throw lastErr;
+}
+
+async function callGemini(parts) {
+  let lastErr;
+  for (const modelId of GEMINI_MODELS) {
+    const model = genAI.getGenerativeModel({ model: modelId });
+    try {
+      console.log(`Trying Gemini model: ${modelId}`);
       const result = await model.generateContent(parts);
       return result.response.text();
     } catch (err) {
+      lastErr = err;
       const is429 = err.message?.includes('429');
-      const retryMatch = err.message?.match(/retry in (\d+)s/i);
-      const waitSecs = retryMatch ? parseInt(retryMatch[1]) + 2 : 15;
-      if (is429 && i < retries - 1) {
-        console.warn(`Gemini rate limited. Retrying in ${waitSecs}s...`);
-        await sleep(waitSecs * 1000);
+      const is503 = err.message?.includes('503');
+      if (is503) {
+        // High demand — don't waste time retrying same model, move to next immediately
+        console.warn(`Gemini ${modelId} returned 503, trying next model...`);
         continue;
       }
-      throw err;
+      if (is429) {
+        // Rate limited — wait briefly then try next model
+        console.warn(`Gemini ${modelId} rate limited (429), trying next model in 5s...`);
+        await sleep(5000);
+        continue;
+      }
+      throw err; // non-retriable error
     }
   }
+  // All Gemini models failed — fall back to OpenRouter
+  console.warn('All Gemini models failed. Falling back to OpenRouter...');
+  return null;
 }
 
 /**
@@ -76,7 +138,10 @@ Provide a complete analysis in this EXACT JSON format (return ONLY JSON, no mark
     ? [prompt, { inlineData: { mimeType, data: imageBase64 } }]
     : [prompt];
 
-  const text = await callGemini(parts);
+  let text = await callGemini(parts);
+  if (text === null) {
+    text = await callOpenRouter(prompt, imageBase64, mimeType);
+  }
   const cleaned = text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
 
   try {
