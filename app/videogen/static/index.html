@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Video Studio</title>
+<link rel="icon" href="data:,">
+<style>
+:root{--bg:#f6f7f9;--card:#fff;--ink:#16181d;--mute:#667085;--line:#e3e6ec;--acc:#3b5bdb;--ok:#1a7f4b;--warn:#b54708;--bad:#c01048}
+@media(prefers-color-scheme:dark){:root{--bg:#0f1115;--card:#171a21;--ink:#e8eaf0;--mute:#9aa3b2;--line:#2a2f3a;--acc:#7c93ff;--ok:#4ad08a;--warn:#f5a45b;--bad:#ff6b8b}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 system-ui,sans-serif}
+header{display:flex;align-items:center;justify-content:space-between;padding:12px 20px;border-bottom:1px solid var(--line);background:var(--card);position:sticky;top:0;z-index:2}
+header h1{font-size:17px;margin:0;cursor:pointer}main{max-width:980px;margin:0 auto;padding:20px 16px 80px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px;margin:12px 0}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:12px}
+button{font:inherit;border:1px solid var(--line);background:var(--card);color:var(--ink);padding:7px 14px;border-radius:8px;cursor:pointer}
+button.primary{background:var(--acc);border-color:var(--acc);color:#fff}button:disabled{opacity:.5;cursor:default}
+button.link{border:0;background:none;color:var(--acc);padding:0}
+input,textarea,select{font:inherit;width:100%;padding:7px 10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--ink)}
+textarea{min-height:70px;resize:vertical}label{display:block;font-size:13px;color:var(--mute);margin:8px 0 3px}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.row>*{flex:0 0 auto}.row>.grow{flex:1 1 200px}
+.steps{display:flex;gap:6px;flex-wrap:wrap;margin:8px 0}.step{padding:3px 10px;border-radius:99px;border:1px solid var(--line);font-size:13px;color:var(--mute)}
+.step.cur{border-color:var(--acc);color:var(--acc);font-weight:600}.step.done{color:var(--ok);border-color:var(--ok)}
+.pill{display:inline-block;font-size:12px;padding:1px 8px;border-radius:99px;border:1px solid}.ok{color:var(--ok)}.warn{color:var(--warn)}.bad{color:var(--bad)}.mute{color:var(--mute)}
+.banner{border:1px solid var(--warn);color:var(--warn);border-radius:8px;padding:8px 12px;margin:10px 0}
+.err{border-color:var(--bad);color:var(--bad)}video{width:100%;border-radius:8px;background:#000}
+table{width:100%;border-collapse:collapse}td,th{text-align:left;padding:6px 8px;border-bottom:1px solid var(--line);vertical-align:top}
+.spin{display:inline-block;width:12px;height:12px;border:2px solid var(--line);border-top-color:var(--acc);border-radius:50%;animation:s 1s linear infinite;vertical-align:-2px;margin-right:6px}
+@keyframes s{to{transform:rotate(360deg)}}dialog{border:1px solid var(--line);border-radius:12px;background:var(--card);color:var(--ink);max-width:560px;width:92%}
+h2{margin:4px 0 8px;font-size:18px}h3{margin:12px 0 4px;font-size:15px}small{color:var(--mute)}
+</style>
+</head>
+<body>
+<header><h1 id="home">🎬 Video Studio</h1><button id="settingsBtn">Settings</button></header>
+<main id="app"></main>
+<dialog id="dlg"></dialog>
+<script>
+const $ = s => document.querySelector(s);
+const STAGES = [["topics","Topic"],["research","Research"],["script","Script"],["media","Media"],["video","Video"],["export","Export"]];
+let timer = null, categories = [];
+
+// Safe element builder: strings become text nodes (never HTML).
+function h(tag, attrs, ...kids) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (k.startsWith("on")) e.addEventListener(k.slice(2), v);
+    else if (k === "class") e.className = v;
+    else if (v !== false && v != null) e.setAttribute(k, v === true ? "" : v);
+  }
+  for (const k of kids.flat()) if (k != null && k !== false) e.append(k.nodeType ? k : document.createTextNode(k));
+  return e;
+}
+async function api(path, method = "GET", body) {
+  const r = await fetch("/api" + path, {method, headers: body ? {"Content-Type": "application/json"} : {}, body: body ? JSON.stringify(body) : undefined});
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) { alert(j.detail || ("Error " + r.status)); throw new Error(j.detail || r.status); }
+  return j;
+}
+function mount(...n) { const a = $("#app"); a.replaceChildren(...n.flat().filter(Boolean)); }
+
+// ---------- Home ----------
+async function showHome() {
+  clearInterval(timer);
+  const [cats, runs, health, st] = await Promise.all([api("/categories"), api("/runs"), api("/health"), api("/settings")]);
+  categories = cats;
+  const needKeys = Object.entries(st.providers).filter(([s, p]) => p !== "mock" && !st.key_status[p]).map(([s, p]) => `${s}: ${p}`);
+  mount(
+    !health.ffmpeg && h("div", {class: "banner"}, "FFmpeg is not installed on the server; video assembly will fail."),
+    needKeys.length && h("div", {class: "banner"}, "No API key yet for: " + needKeys.join(", ") + ". Open Settings to add one (or switch to 'mock' to try the app offline)."),
+    h("h2", {}, "Start a new video"),
+    h("div", {class: "grid"}, cats.map(c => h("div", {class: "card"}, h("b", {}, c.label), h("p", {class: "mute"}, c.brief),
+      h("button", {class: "primary", onclick: async () => { const r = await api("/runs", "POST", {category: c.id}); location.hash = "#/run/" + r.id; }}, "Research this")))),
+    h("h2", {}, "Your runs"),
+    runs.length ? h("div", {class: "card"}, h("table", {}, runs.map(r => h("tr", {},
+      h("td", {}, h("button", {class: "link", onclick: () => location.hash = "#/run/" + r.id}, r.data.topic || labelOf(r.category))),
+      h("td", {class: "mute"}, labelOf(r.category)), h("td", {}, statusPill(r)),
+      h("td", {class: "mute"}, new Date(r.created * 1000).toLocaleString()))))) : h("p", {class: "mute"}, "No runs yet."));
+}
+const labelOf = id => (categories.find(c => c.id === id) || {}).label || id;
+const statusPill = r => h("span", {class: "pill " + ({running: "mute", awaiting_approval: "warn", failed: "bad", done: "ok"}[r.status])},
+  r.status === "awaiting_approval" ? "needs your review" : r.status);
+
+// ---------- Run view ----------
+async function showRun(id) {
+  clearInterval(timer);
+  if (!categories.length) categories = await api("/categories");
+  let last = "";
+  const tick = async () => {
+    const r = await api("/runs/" + id);
+    const sig = JSON.stringify([r.stage, r.status, r.message, r.updated]);
+    if (sig !== last) { last = sig; renderRun(r); }
+    if (r.status !== "running") clearInterval(timer);
+  };
+  await tick();
+  timer = setInterval(tick, 2000);
+}
+function steps(r) {
+  const idx = STAGES.findIndex(s => s[0] === r.stage);
+  return h("div", {class: "steps"}, STAGES.map(([k, l], i) => h("span", {class: "step " + (r.status === "done" || i < idx ? "done" : i === idx ? "cur" : "")}, l)));
+}
+function renderRun(r) {
+  const d = r.data;
+  const act = (path, body, method = "POST") => async () => { await api(`/runs/${r.id}/${path}`, method, body); showRun(r.id); };
+  const feedbackBox = (label = "Regenerate with feedback") => {
+    const t = h("textarea", {placeholder: "What should change? (optional)"});
+    return h("details", {}, h("summary", {}, label), t, h("button", {onclick: async () => { await api(`/runs/${r.id}/regenerate`, "POST", {feedback: t.value}); showRun(r.id); }}, "Regenerate"));
+  };
+  let body = [];
+  if (r.status === "running") body.push(h("div", {class: "card"}, h("span", {class: "spin"}), r.message || "Working…", h("p", {class: "mute"}, "This page updates automatically. You can leave and come back.")));
+  if (r.status === "failed") body.push(h("div", {class: "card banner err"}, h("b", {}, "This step failed: "), r.error,
+    h("div", {class: "row"}, h("button", {class: "primary", onclick: act("retry")}, "Retry"), h("button", {onclick: () => $("#settingsBtn").click()}, "Open settings"))));
+  if (r.status === "awaiting_approval") body.push(gate(r, act, feedbackBox));
+  if (r.status === "done") body.push(donePanel(r));
+  mount(h("button", {class: "link", onclick: () => location.hash = ""}, "← All runs"),
+    h("h2", {}, d.topic || labelOf(r.category)), h("small", {}, labelOf(r.category)), steps(r), body);
+}
+function gate(r, act, feedbackBox) {
+  const d = r.data;
+  if (r.stage === "topics") {
+    const custom = h("input", {placeholder: "…or type your own topic"});
+    return h("div", {}, h("h3", {}, "Gate 1a — choose a topic"),
+      d.topics.map(t => h("div", {class: "card"}, h("b", {}, t.title), h("p", {}, t.why_trending), h("p", {class: "mute"}, "Angle: " + t.angle),
+        h("div", {class: "row"}, h("button", {class: "primary", onclick: act("select-topic", {title: t.title, angle: t.angle})}, "Research this topic"),
+          (t.evidence_urls || []).slice(0, 3).map((u, i) => h("a", {href: u, target: "_blank", rel: "noopener noreferrer"}, "source " + (i + 1)))))),
+      h("div", {class: "card row"}, h("div", {class: "grow"}, custom), h("button", {onclick: () => custom.value.trim() && act("select-topic", {title: custom.value.trim()})()}, "Use my topic")),
+      feedbackBox("Not these? Find different topics"));
+  }
+  if (r.stage === "research") {
+    const fs = JSON.parse(JSON.stringify(d.factsheet));
+    const list = h("tbody");
+    const draw = () => { list.replaceChildren(...fs.facts.map((f, i) => h("tr", {},
+      h("td", {}, h("span", {class: "pill " + (f.verified ? "ok" : "bad")}, f.verified ? "sourced" : "unverified")),
+      h("td", {}, h("input", {value: f.claim, onchange: e => f.claim = e.target.value})),
+      h("td", {}, f.source_url ? h("a", {href: f.source_url, target: "_blank", rel: "noopener noreferrer"}, "link") : "—"),
+      h("td", {}, h("button", {onclick: () => { fs.facts.splice(i, 1); draw(); }}, "Remove"))))); };
+    draw();
+    return h("div", {}, h("h3", {}, "Gate 1b — approve the fact sheet"),
+      h("div", {class: "card"}, h("p", {}, fs.summary),
+        fs.unverified_count > 0 && h("div", {class: "banner"}, `${fs.unverified_count} fact(s) have no matching researched source. Remove or fix them; the script will treat them as unverified.`),
+        h("table", {}, h("thead", {}, h("tr", {}, h("th", {}, "Status"), h("th", {}, "Claim (editable)"), h("th", {}, "Source"), h("th", {}))), list),
+        fs.uncertainties.length > 0 && [h("h3", {}, "Disputed / unknown"), h("ul", {}, fs.uncertainties.map(u => h("li", {}, u)))],
+        h("h3", {}, "Sources"), h("ul", {}, fs.sources.map(s => h("li", {}, h("a", {href: s.url, target: "_blank", rel: "noopener noreferrer"}, s.title || s.url))))),
+      h("div", {class: "row"}, h("button", {class: "primary", onclick: act("approve-factsheet", {factsheet: fs})}, "Approve & write script")), feedbackBox());
+  }
+  if (r.stage === "script") {
+    const sc = JSON.parse(JSON.stringify(d.script));
+    const scenes = sc.scenes.map(s => h("div", {class: "card"}, h("b", {}, "Scene " + s.n), s.is_disclaimer && h("span", {class: "pill mute"}, " required disclaimer"),
+      h("label", {}, "Narration"), h("textarea", {onchange: e => s.narration = e.target.value}, s.narration),
+      h("label", {}, "On-screen text"), h("input", {value: s.on_screen_text, onchange: e => s.on_screen_text = e.target.value}),
+      h("label", {}, "Image prompt"), h("textarea", {onchange: e => s.visual_prompt = e.target.value}, s.visual_prompt)));
+    const title = h("input", {value: sc.title, onchange: e => sc.title = e.target.value});
+    return h("div", {}, h("h3", {}, "Gate 2 — approve the script"),
+      d.script.warnings.length > 0 && h("div", {class: "banner err"}, h("b", {}, "Risky phrasing: "), d.script.warnings.map(w => `scene ${w.scene}: "${w.phrase}"`).join("; ")),
+      d.script.fact_check.length > 0 ? h("div", {class: "banner"}, h("b", {}, "Fact-check flagged:"), h("ul", {}, d.script.fact_check.map(i => h("li", {}, `Scene ${i.scene}: ${i.claim} — ${i.problem}`)))) : h("p", {class: "ok"}, "Fact-check found no unsupported claims."),
+      h("div", {class: "card"}, h("label", {}, "Video title"), title, h("p", {class: "mute"}, `${d.script.word_count} words ≈ ${(d.script.word_count / 140).toFixed(1)} min at 140 wpm`),
+        h("details", {}, h("summary", {}, "Storyline"), h("p", {}, d.storyline.logline), h("ol", {}, d.storyline.beats.map(b => h("li", {}, h("b", {}, b.name + ": "), b.summary))))),
+      scenes, h("div", {class: "row"}, h("button", {class: "primary", onclick: act("approve-script", {script: sc})}, "Approve script & see cost")), feedbackBox());
+  }
+  if (r.stage === "media") {
+    const c = d.cost;
+    return h("div", {}, h("h3", {}, "Gate 2b — approve generation cost"),
+      h("div", {class: "card"}, h("table", {}, h("thead", {}, h("tr", {}, ["Item", "Provider", "Qty", "Est. USD"].map(x => h("th", {}, x)))),
+        h("tbody", {}, c.lines.map(l => h("tr", {}, h("td", {}, l.item), h("td", {}, l.provider), h("td", {}, l.quantity), h("td", {}, l.usd.toFixed(3)))),
+          h("tr", {}, h("td", {}, h("b", {}, "Total")), h("td"), h("td"), h("td", {}, h("b", {}, "$" + c.total_usd.toFixed(2)))))),
+        h("p", {class: "mute"}, c.note)),
+      h("div", {class: "row"}, h("button", {class: "primary", onclick: act("approve-media")}, "Generate images, voice & video")));
+  }
+  if (r.stage === "video") {
+    const base = `/api/runs/${r.id}/files/`;
+    return h("div", {}, h("h3", {}, "Gate 3 — preview the video"),
+      h("div", {class: "card"}, h("video", {controls: true, src: base + "video.mp4", poster: base + "media/thumbnail.jpg"}),
+        h("p", {class: "mute"}, `${d.video.duration}s · ${d.video.size_mb} MB. Watch it fully before exporting.`)),
+      h("div", {class: "row"}, h("button", {class: "primary", onclick: act("approve-video")}, "Approve & export"),
+        h("button", {onclick: act("regenerate", {})}, "Re-render video")));
+  }
+}
+function donePanel(r) {
+  const base = `/api/runs/${r.id}/files/export/`, files = r.data.export || [];
+  return h("div", {class: "card"}, h("h3", {}, "Exported ✔"), h("p", {}, "Download the files and upload to YouTube manually. Read metadata.json → upload_notes first (AI-content disclosure)."),
+    h("ul", {}, files.map(f => h("li", {}, h("a", {href: base + f, download: f}, f)))), h("img", {src: base + "thumbnail.jpg", style: "max-width:100%;border-radius:8px"}));
+}
+
+// ---------- Settings ----------
+$("#settingsBtn").onclick = async () => {
+  const s = await api("/settings"), dlg = $("#dlg"), keys = {};
+  const stageSel = {}, models = {};
+  const PS = {gemini: ["text", "image", "tts"], openai: ["text", "image", "tts"], anthropic: ["text"], mock: ["text", "image", "tts"]};
+  const rows = [["text", "Research & script (text)"], ["image", "Images"], ["tts", "Voiceover"]].map(([st, label]) => {
+    const sel = h("select", {}, Object.keys(PS).filter(p => PS[p].includes(st)).map(p => h("option", {value: p, selected: s.providers[st] === p}, p + (p === "anthropic" ? " (text only)" : p === "gemini" ? " (default)" : ""))));
+    const mi = h("input", {value: (s.models[s.providers[st]] || {})[st] || "", placeholder: "model name"});
+    sel.onchange = () => { mi.value = (s.models[sel.value] || {})[st] || ""; };
+    stageSel[st] = sel; models[st] = mi;
+    return h("div", {}, h("label", {}, label), h("div", {class: "row"}, h("div", {class: "grow"}, sel), h("div", {class: "grow"}, mi)));
+  });
+  const keyRows = ["gemini", "openai", "anthropic"].map(p => { keys[p] = h("input", {type: "password", placeholder: s.key_status[p] ? "saved " + s.key_status[p] + " (leave blank to keep)" : "paste API key", autocomplete: "off"}); return h("div", {}, h("label", {}, p + " API key"), keys[p]); });
+  const mins = h("input", {type: "number", min: 1, max: 20, value: s.video.target_minutes});
+  dlg.replaceChildren(h("h2", {}, "Settings"), h("p", {class: "mute"}, "Keys are stored on this server only (data/settings.json) unless set as environment variables, which take priority."),
+    rows, h("h3", {}, "API keys"), keyRows, h("label", {}, "Target video length (minutes)"), mins,
+    h("div", {class: "row", style: "margin-top:14px"}, h("button", {class: "primary", onclick: async () => {
+      const update = {providers: {}, models: {}, keys: {}, video: {target_minutes: +mins.value || 6}};
+      for (const st of Object.keys(stageSel)) { const p = stageSel[st].value; update.providers[st] = p; update.models[p] = {...(update.models[p] || {}), [st]: models[st].value}; }
+      for (const p in keys) if (keys[p].value.trim()) update.keys[p] = keys[p].value.trim();
+      try { await api("/settings", "PUT", update); dlg.close(); route(); } catch (e) {}
+    }}, "Save"), h("button", {onclick: () => dlg.close()}, "Cancel")));
+  dlg.showModal();
+};
+
+function route() { const m = location.hash.match(/^#\/run\/(\w+)/); m ? showRun(m[1]) : showHome(); }
+$("#home").onclick = () => { location.hash = ""; route(); };
+addEventListener("hashchange", route);
+route();
+</script>
+</body>
+</html>
