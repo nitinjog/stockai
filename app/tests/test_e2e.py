@@ -74,3 +74,25 @@ def test_missing_key_fails_visibly_and_is_retryable(data_dir):
     c.put("/api/settings", json={"providers": {"text": "mock"}})
     c.post(f"/api/runs/{rid}/retry")
     assert wait(c, rid, "topics")["data"]["topics"]
+
+
+def test_password_gate_and_restart_recovery(monkeypatch, data_dir):
+    from videogen import db
+    c = TestClient(app)
+    monkeypatch.setenv("APP_PASSWORD", "s3cret")
+    assert c.get("/api/health").status_code == 200          # health check stays open
+    assert c.get("/api/runs").status_code == 401
+    assert c.get("/", follow_redirects=False).status_code == 401
+    assert c.get("/api/runs", auth=("me", "wrong")).status_code == 401
+    assert c.get("/api/runs", auth=("me", "s3cret")).status_code == 200
+    assert c.get("/api/runs", headers={"authorization": "Basic !!!"}).status_code == 401
+
+    monkeypatch.delenv("APP_PASSWORD")
+    monkeypatch.setenv("RENDER", "true")                     # deployed without a password -> refuse
+    assert c.get("/api/runs").status_code == 503
+
+    monkeypatch.delenv("RENDER")
+    r = db.create("mystery")                                 # status=running, no worker alive
+    assert db.fail_interrupted() == 1
+    got = db.get(r["id"])
+    assert got["status"] == "failed" and "restart" in got["error"]

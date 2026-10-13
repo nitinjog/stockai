@@ -64,7 +64,7 @@ def assemble(script: dict, media: dict, run_dir: Path, settings: dict, progress=
         clip = work / f"clip_{n:02d}.mp4"
         frames = max(1, int(dur * fps))
         if v.get("ken_burns", True):
-            vf = (f"scale={w * 2}:-2,zoompan=z='min(zoom+0.0006,1.12)':x='iw/2-(iw/zoom/2)':"
+            vf = (f"scale={w * 3 // 2}:-2,zoompan=z='min(zoom+0.0006,1.12)':x='iw/2-(iw/zoom/2)':"
                   f"y='ih/2-(ih/zoom/2)':d={frames}:s={w}x{h}:fps={fps},format=yuv420p")
         else:
             vf = f"scale={w}:{h},format=yuv420p,fps={fps}"

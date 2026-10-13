@@ -68,3 +68,11 @@ def update(rid: str, *, stage=None, status=None, message=None, error=None, data:
         c.execute("UPDATE runs SET stage=?, status=?, message=?, error=?, data=?, updated=? WHERE id=?",
                   (stage or r["stage"], status or r["status"], message if message is not None else r["message"],
                    error if error is not None else r["error"], json.dumps(cur), time.time(), rid))
+
+
+def fail_interrupted() -> int:
+    """After a restart/redeploy no worker thread is alive: surface orphaned runs so the user can Retry."""
+    with _lock, _conn() as c:
+        cur = c.execute("UPDATE runs SET status='failed', error=?, updated=? WHERE status='running'",
+                        ("Interrupted by a server restart. Click Retry to resume (finished media is reused).", time.time()))
+        return cur.rowcount

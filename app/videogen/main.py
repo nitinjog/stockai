@@ -1,9 +1,12 @@
 """FastAPI app: JSON API + static single-page UI."""
+import base64
+import hmac
+import os
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from fastapi import Body, FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi import Body, FastAPI, HTTPException, Request
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ValidationError
 
@@ -15,6 +18,32 @@ from .models import FactSheet, Script
 app = FastAPI(title="Video Studio")
 pool = ThreadPoolExecutor(max_workers=2)
 STATIC = Path(__file__).parent / "static"
+
+
+@app.on_event("startup")
+def _recover():
+    db.fail_interrupted()
+
+
+@app.middleware("http")
+async def require_password(request: Request, call_next):
+    """HTTP Basic auth gate. APP_PASSWORD must be set on any public deployment (Render sets RENDER=true);
+    without it a deployed instance refuses to serve, so nobody can spend your API keys."""
+    if request.url.path == "/api/health":
+        return await call_next(request)
+    pw = os.environ.get("APP_PASSWORD", "")
+    if not pw:
+        if os.environ.get("RENDER"):
+            return JSONResponse({"detail": "APP_PASSWORD is not set; refusing to serve."}, status_code=503)
+        return await call_next(request)  # local use
+    try:
+        supplied = base64.b64decode(request.headers.get("authorization", "")[6:]).decode().split(":", 1)[1]
+    except Exception:  # noqa: BLE001 - any malformed header means unauthenticated
+        supplied = ""
+    if not hmac.compare_digest(supplied.encode(), pw.encode()):
+        return Response("Authentication required", status_code=401,
+                        headers={"WWW-Authenticate": 'Basic realm="Video Studio"'})
+    return await call_next(request)
 
 
 class NewRun(BaseModel):

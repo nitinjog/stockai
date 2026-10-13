@@ -49,3 +49,19 @@ editable because they change often. Cost rates in `config.py` are placeholders; 
 ## Not verified against live APIs
 The Gemini/OpenAI/Anthropic adapters follow the documented REST shapes and are tested against stubbed responses,
 not live calls. Run one real video with your key and report any 400s (model names, image/TTS request shapes).
+
+## Deploy on Render
+Uses `app/render.yaml` (a separate blueprint; the repo-root `render.yaml` is the old Node app) and `app/Dockerfile`
+(FFmpeg is installed in the image).
+1. Push the branch you want to deploy to GitHub.
+2. Render dashboard → **New → Blueprint** → pick the repo and branch → set the blueprint path to `app/render.yaml`.
+   (Or **New → Web Service**: Docker, root directory `app`, health check `/api/health`, add a disk mounted at
+   `/data`, and the env vars below.)
+3. Fill in `GEMINI_API_KEY` when prompted (OpenAI/Anthropic optional). `APP_PASSWORD` is auto-generated:
+   read it under the service's **Environment** tab. Open the URL and log in with any username + that password.
+4. Without `APP_PASSWORD` a Render deployment refuses to serve, so strangers can never spend your keys.
+
+Notes: the disk (`/data`) needs a paid plan and holds runs, videos and settings; on the free plan everything is
+lost on restart. If a deploy/restart interrupts a run it shows as failed with **Retry** (finished media is reused).
+Prefer environment variables over saving keys in Settings on a server. Rendering uses RAM; if FFmpeg gets
+OOM-killed on a small plan, lower the resolution (`video.width/height` in `data/settings.json`) or upgrade.

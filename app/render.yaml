@@ -1,0 +1,24 @@
+# Blueprint for Video Studio. Separate from the repo-root render.yaml (old Node app).
+services:
+  - type: web
+    name: video-studio
+    runtime: docker
+    region: singapore
+    plan: starter            # persistent disks need a paid plan; free tier loses all data on restart
+    rootDir: app
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /api/health
+    autoDeploy: false
+    disk:
+      name: video-data
+      mountPath: /data       # runs, videos and settings live here
+      sizeGB: 5
+    envVars:
+      - key: APP_PASSWORD    # login password (username can be anything)
+        generateValue: true
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: OPENAI_API_KEY  # optional
+        sync: false
+      - key: ANTHROPIC_API_KEY  # optional, text only
+        sync: false
